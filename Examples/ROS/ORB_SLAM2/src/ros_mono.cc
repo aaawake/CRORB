@@ -39,6 +39,7 @@ public:
     ImageGrabber(ORB_SLAM2::System* pSLAM):mpSLAM(pSLAM){}
 
     void GrabImage(const sensor_msgs::ImageConstPtr& msg);
+    void GrabImage(const sensor_msgs::CompressedImageConstPtr& msg);
 
     ORB_SLAM2::System* mpSLAM;
 };
@@ -61,7 +62,12 @@ int main(int argc, char **argv)
     ImageGrabber igb(&SLAM);
 
     ros::NodeHandle nodeHandler;
-    ros::Subscriber sub = nodeHandler.subscribe("/camera/image_raw", 1, &ImageGrabber::GrabImage,&igb);
+    // ros::Subscriber sub = nodeHandler.subscribe("/camera/image_raw", 1, &ImageGrabber::GrabImage,&igb);
+    ros::Subscriber sub = nodeHandler.subscribe<sensor_msgs::CompressedImage>(
+        "/usb_cam/image_raw/compressed", 
+        1, 
+        [&igb](const sensor_msgs::CompressedImageConstPtr& msg) { igb.GrabImage(msg); }
+    );
 
     ros::spin();
 
@@ -92,4 +98,27 @@ void ImageGrabber::GrabImage(const sensor_msgs::ImageConstPtr& msg)
     mpSLAM->TrackMonocular(cv_ptr->image,cv_ptr->header.stamp.toSec());
 }
 
+void ImageGrabber::GrabImage(const sensor_msgs::CompressedImageConstPtr& msg)
+{
+    // Copy the ros image message to cv::Mat.
+    cv::Mat image;
+    try
+    {
+        // 解码图像
+        std::vector<uchar> data(msg->data.begin(), msg->data.end());
+        image = cv::imdecode(data, cv::IMREAD_COLOR); // 指定读取为彩色图像
+
+        if (image.empty())
+        {
+            ROS_ERROR("Failed to decode image");
+            return;
+        }
+    }
+    catch (cv_bridge::Exception& e)
+    {
+        ROS_ERROR("cv_bridge exception: %s", e.what());
+        return;
+    }
+    mpSLAM->TrackMonocular(image,msg->header.stamp.toSec());
+}
 
