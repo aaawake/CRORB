@@ -65,6 +65,8 @@ ${PROJECT_SOURCE_DIR}/../../../lib/libCRORBbasic4.so
 # Node for monocular camera
 rosbuild_add_executable(Mono
 src/ros_mono.cc
+src/Mono/ViewerMono.h
+src/Mono/ViewerMono.cc
 )
 
 target_link_libraries(Mono

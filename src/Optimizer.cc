@@ -1165,6 +1165,7 @@ void Optimizer::LocalBundleAdjustment2(KeyFrame *pKF, bool* pbStopFlag, Map* pMa
     const float thHuberMono = sqrt(5.991);
     const float thHuberStereo = sqrt(7.815);
     const float thHuberCy = sqrt(3.841);
+    const float weight = 1;
     for(list<MapPoint*>::iterator lit=lLocalMapPoints.begin(), lend=lLocalMapPoints.end(); lit!=lend; lit++)
     {
         MapPoint* pMP = *lit;
@@ -1184,7 +1185,7 @@ void Optimizer::LocalBundleAdjustment2(KeyFrame *pKF, bool* pbStopFlag, Map* pMa
             edge->setRobustKernel(rk);
             rk->setDelta(thHuberCy);
             edge->setInformation(
-                    Eigen::Matrix<double, 1, 1>::Identity() * (*(*pMP).mpMapCylinder).inverseVariance); // 信息矩阵：协方差矩阵之逆
+                    Eigen::Matrix<double, 1, 1>::Identity() * weight * (*(*pMP).mpMapCylinder).inverseVariance); // 信息矩阵：协方差矩阵之逆
             edge->setLevel(0);
             optimizer.addEdge(edge);
             vpMapPointEdgeCy.emplace_back(pMP);
@@ -1545,7 +1546,7 @@ void Optimizer::LocalBundleAdjustment2(KeyFrame *pKF, bool* pbStopFlag, Map* pMa
                 }
                 j=0;
                 // check cylindrical points among local map points
-                if(nInlier>lLocalMapPoints.size()*0.6){
+                if(nInlier>lLocalMapPoints.size()*0.4){
                     candidateCylinder->SetWorldPara(Converter::toCvMat(vCy->estimate()));
                     pMap->AddMapCylinder(candidateCylinder);
                     pMap->EraseWaitingMapCylinder();

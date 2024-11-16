@@ -23,21 +23,33 @@
 #include<algorithm>
 #include<fstream>
 #include<chrono>
+#include <condition_variable>
+#include <mutex>
 
 #include<ros/ros.h>
+#include <std_msgs/UInt8.h>
 #include <cv_bridge/cv_bridge.h>
 
 #include<opencv2/core/core.hpp>
 
 #include"../../../include/System.h"
+#include "./Mono/ViewerMono.h"
 
 using namespace std;
 
 class ImageGrabber
 {
 public:
-    ImageGrabber(ORB_SLAM2::System* pSLAM):mpSLAM(pSLAM){}
+    std::mutex exchange_mutex;
+    std::condition_variable exchange_cv;
+    bool exchange_ready = true;
+    ros::Publisher exchange_pub;
 
+    ImageGrabber(ORB_SLAM2::System* pSLAM, ros::NodeHandle& nh):mpSLAM(pSLAM){
+        exchange_pub = nh.advertise<std_msgs::UInt8>("/Exchange", 1000);
+    }
+
+    void ExchangeCallback(const std_msgs::UInt8::ConstPtr& msg);
     void GrabImage(const sensor_msgs::ImageConstPtr& msg);
     void GrabImage(const sensor_msgs::CompressedImageConstPtr& msg);
 
@@ -59,17 +71,37 @@ int main(int argc, char **argv)
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
     ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::MONOCULAR,true);
 
-    ImageGrabber igb(&SLAM);
+    ORB_SLAM2::ViewerMono viewerMono(&SLAM);
 
     ros::NodeHandle nodeHandler;
+
+    ImageGrabber igb(&SLAM, nodeHandler);
     // ros::Subscriber sub = nodeHandler.subscribe("/camera/image_raw", 1, &ImageGrabber::GrabImage,&igb);
+
+    ros::Subscriber exchange_sub = nodeHandler.subscribe<std_msgs::UInt8>(
+        "/Exchange", 
+        1, 
+        [&igb](const std_msgs::UInt8ConstPtr& msg) { igb.ExchangeCallback(msg); }
+    );
+
     ros::Subscriber sub = nodeHandler.subscribe<sensor_msgs::CompressedImage>(
         "/usb_cam/image_raw/compressed", 
         1, 
         [&igb](const sensor_msgs::CompressedImageConstPtr& msg) { igb.GrabImage(msg); }
     );
 
-    ros::spin();
+    // ros::Duration(1).sleep();
+    // std_msgs::UInt8 initial_msg;
+    // initial_msg.data = 0;
+    // igb.exchange_pub.publish(initial_msg);
+    // ROS_INFO("Initial Exchange message published with data=0.");
+
+    ros::Duration(2).sleep();
+    thread tViewer = thread(&ORB_SLAM2::ViewerMono::Run,&viewerMono);
+    
+    ros::MultiThreadedSpinner spinner(4); // 使用4个线程
+    spinner.spin();
+    // ros::spin();
 
     // Stop all threads
     SLAM.Shutdown();
@@ -80,6 +112,24 @@ int main(int argc, char **argv)
     ros::shutdown();
 
     return 0;
+}
+
+void ImageGrabber::ExchangeCallback(const std_msgs::UInt8::ConstPtr& msg)
+{
+    ROS_INFO("Received message: %d", msg->data);
+    
+    if (msg->data == 0)
+    {
+        std::lock_guard<std::mutex> lock(exchange_mutex);
+        exchange_ready = true;
+        exchange_cv.notify_all();
+    }
+    else
+    {
+        std::lock_guard<std::mutex> lock(exchange_mutex);
+        exchange_ready = false;
+        ROS_INFO("Waiting for Exchange...");
+    }
 }
 
 void ImageGrabber::GrabImage(const sensor_msgs::ImageConstPtr& msg)
@@ -100,6 +150,14 @@ void ImageGrabber::GrabImage(const sensor_msgs::ImageConstPtr& msg)
 
 void ImageGrabber::GrabImage(const sensor_msgs::CompressedImageConstPtr& msg)
 {
+    {
+        std::unique_lock<std::mutex> lock(exchange_mutex);
+        while (!exchange_ready)
+        {
+            exchange_cv.wait(lock);
+        }
+    }
+
     // Copy the ros image message to cv::Mat.
     cv::Mat image;
     try

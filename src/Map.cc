@@ -173,18 +173,18 @@ void Map::clear()
     for(set<MapPoint*>::iterator sit=mspMapPoints.begin(), send=mspMapPoints.end(); sit!=send; sit++)
         delete *sit;
 
-    for(set<KeyFrame*>::iterator sit=mspKeyFrames.begin(), send=mspKeyFrames.end(); sit!=send; sit++)
-        delete *sit;
+    // for(set<KeyFrame*>::iterator sit=mspKeyFrames.begin(), send=mspKeyFrames.end(); sit!=send; sit++)
+    //     delete *sit;
 
-    for(set<MapCylinder*>::iterator sit=mspMapCylinders.begin(), send=mspMapCylinders.end(); sit!=send; sit++)
-        delete *sit;
+    // for(set<MapCylinder*>::iterator sit=mspMapCylinders.begin(), send=mspMapCylinders.end(); sit!=send; sit++)
+    //     delete *sit;
 
     mspMapPoints.clear();
-    mspKeyFrames.clear();
-    mspMapCylinders.clear();
-    mnMaxKFid = 0;
+    // mspKeyFrames.clear();
+    // mspMapCylinders.clear();
+    // mnMaxKFid = 0;
     mvpReferenceMapPoints.clear();
-    mvpKeyFrameOrigins.clear();
+    // mvpKeyFrameOrigins.clear();
 }
 
 } //namespace ORB_SLAM
