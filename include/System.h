@@ -78,6 +78,8 @@ public:
     // Returns the camera pose (empty if tracking fails).
     cv::Mat TrackMonocular(const cv::Mat &im, const double &timestamp);
 
+    cv::Mat TrackMonocular(const cv::Mat &im, const double &timestamp, const int robotID);
+
     // This stops local mapping thread (map building) and performs only camera tracking.
     void ActivateLocalizationMode();
     // This resumes local mapping thread and performs SLAM again.
@@ -89,6 +91,9 @@ public:
 
     // Reset the system (clear map)
     void Reset();
+
+    // // Turn on the light and get the other cars moving
+    // void ExchangeOtherCar();
 
     // All threads will be requested to finish.
     // It waits until all threads have finished.
@@ -173,7 +178,7 @@ private:
     bool mbDeactivateLocalizationMode;
 
     // Tracking state
-    int mTrackingState;
+    int mTrackingState;   // Only for ros_mono_ar.cc
     std::vector<MapPoint*> mTrackedMapPoints;
     std::vector<cv::KeyPoint> mTrackedKeyPointsUn;
     std::mutex mMutexState;

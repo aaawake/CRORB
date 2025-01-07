@@ -30,7 +30,7 @@ namespace ORB_SLAM2
 {
 
 LocalMapping::LocalMapping(Map *pMap, const float bMonocular):
-    mbMonocular(bMonocular), mbResetRequested(false), mbFinishRequested(false), mbFinished(true), mpMap(pMap),
+    mbMonocular(bMonocular), mbResetRequested(false), mbWrongInitResetRequested(false), mbFinishRequested(false), mbFinished(true), mpMap(pMap),
     mbAbortBA(false), mbStopped(false), mbStopRequested(false), mbNotStop(false), mbAcceptKeyFrames(true)
 {
 }
@@ -49,6 +49,7 @@ void LocalMapping::Run()
 {
 
     mbFinished = false;
+    mbLightInit = false;
 
     while(1)
     {
@@ -56,8 +57,12 @@ void LocalMapping::Run()
         SetAcceptKeyFrames(false);
 
         // Check if there are keyframes in the queue
-        if(CheckNewKeyFrames())
+        // if(CheckNewKeyFrames())
+        if(CheckAllNewKeyFrames())
         {
+            // Set Robot Type by current keyframe
+            SetRobotType();
+
             // BoW conversion and insertion in Map
             ProcessNewKeyFrame();
 
@@ -67,7 +72,8 @@ void LocalMapping::Run()
             // Triangulate new MapPoints
             CreateNewMapPoints();
 
-            if(!CheckNewKeyFrames())
+            // if(!CheckNewKeyFrames())
+            if(!CheckAllNewKeyFrames())
             {
                 // Find more matches in neighbor keyframes and fuse point duplications
                 SearchInNeighbors();
@@ -75,11 +81,22 @@ void LocalMapping::Run()
 
             mbAbortBA = false;
 
-            if(!CheckNewKeyFrames() && !stopRequested())
+            // if(!CheckNewKeyFrames() && !stopRequested())
+            if(!CheckAllNewKeyFrames() && !stopRequested())
             {
                 // Local BA
                 if(mpMap->KeyFramesInMap()>2)
                     Optimizer::LocalBundleAdjustment2(mpCurrentKeyFrame,&mbAbortBA, mpMap);
+                // if(mpMap->KeyFramesInMap()>2)
+                // {
+                //     if(mpCurrentLightKeyFrame)
+                //     {
+                //         Optimizer::LocalBundleAdjustment2(mpCurrentLightKeyFrame, mpCurrentKeyFrame, &mbAbortBA, mpMap, mbLightInit);
+                //         mbLightInit = true;
+                //     }
+                //     else
+                //         Optimizer::LocalBundleAdjustment2(mpCurrentKeyFrame,&mbAbortBA, mpMap);
+                // }
 
                 // Check redundant local Keyframes
                 KeyFrameCulling();
@@ -97,6 +114,7 @@ void LocalMapping::Run()
                 break;
         }
 
+        WrongInitResetIfRequested();
         ResetIfRequested();
 
         // Tracking will see that Local Mapping is busy
@@ -118,6 +136,17 @@ void LocalMapping::InsertKeyFrame(KeyFrame *pKF)
     mbAbortBA=true;
 }
 
+void LocalMapping::InsertLightKeyFrame(KeyFrame* pKF)
+{
+    unique_lock<mutex> lock(mMutexLightKeyFrame);
+    mlNewLightKeyFrames.push_back(pKF);
+}
+
+void LocalMapping::InsertMoveKeyFrame(KeyFrame* pKF)
+{
+    unique_lock<mutex> lock(mMutexMoveKeyFrame);
+    mlNewMoveKeyFrames.push_back(pKF);
+}
 
 bool LocalMapping::CheckNewKeyFrames()
 {
@@ -125,12 +154,60 @@ bool LocalMapping::CheckNewKeyFrames()
     return(!mlNewKeyFrames.empty());
 }
 
+bool LocalMapping::CheckMoveNewKeyFrames()
+{
+    unique_lock<mutex> lock(mMutexNewKFs);
+    return(!mlNewMoveKeyFrames.empty());
+}
+
+bool LocalMapping::CheckLightNewKeyFrames()
+{
+    unique_lock<mutex> lock(mMutexNewKFs);
+    return(!mlNewLightKeyFrames.empty());
+}
+
+bool LocalMapping::CheckAllNewKeyFrames()
+{
+    unique_lock<mutex> lock(mMutexNewKFs);
+    return(!mlNewKeyFrames.empty() || !mlNewMoveKeyFrames.empty() || !mlNewLightKeyFrames.empty());
+}
+
+void LocalMapping::SetRobotType()
+{
+    if(!mlNewMoveKeyFrames.empty())
+        mnRobotType = 1;
+    else if(!mlNewLightKeyFrames.empty())
+        mnRobotType = 0;
+    else
+        mnRobotType = 2;
+}
+
 void LocalMapping::ProcessNewKeyFrame()
 {
+    if(mnRobotType == 1)
     {
+        // std::cout << "mlNewMoveKeyFrames.size()=" << mlNewMoveKeyFrames.size() << endl;
+        unique_lock<mutex> lock(mMutexMoveKeyFrame);
+        mpCurrentKeyFrame = mlNewMoveKeyFrames.front();
+        mlNewMoveKeyFrames.pop_front();
+
+        // mpCurrentLightKeyFrame = mlNewLightKeyFrames.front();
+        // mlNewLightKeyFrames.pop_front();
+    }
+    else if(mnRobotType == 0)
+    {
+        // std::cout << "mlNewLightKeyFrames.size()=" << mlNewMoveKeyFrames.size() << endl;
+        unique_lock<mutex> lock(mMutexLightKeyFrame);
+        mpCurrentKeyFrame = mlNewLightKeyFrames.front();
+        mlNewLightKeyFrames.pop_front();
+    }
+    else if(mnRobotType == 2)
+    {
+        // std::cout << "mlNewKeyFrames.size()=" << mlNewMoveKeyFrames.size() << endl;
         unique_lock<mutex> lock(mMutexNewKFs);
         mpCurrentKeyFrame = mlNewKeyFrames.front();
         mlNewKeyFrames.pop_front();
+        mpCurrentLightKeyFrame = nullptr;
     }
 
     // Compute Bags of Words structures
@@ -262,7 +339,10 @@ void LocalMapping::CreateNewMapPoints()
     // Search matches with epipolar restriction and triangulate
     for(size_t i=0; i<vpNeighKFs.size(); i++)
     {
-        if(i>0 && CheckNewKeyFrames())
+        // if(i>0 && CheckNewKeyFrames())
+        if((i>0 && mnRobotType==1 && CheckMoveNewKeyFrames()) || 
+           (i>0 && mnRobotType==0 && CheckLightNewKeyFrames()) ||
+           (i>0 && mnRobotType==2 && CheckNewKeyFrames()))
             return;
 
         KeyFrame* pKF2 = vpNeighKFs[i];
@@ -338,23 +418,28 @@ void LocalMapping::CreateNewMapPoints()
                 if(cosCyDirRays<0.99) {
                     cv::Mat Ow2=-Rwc2*tcw2;
                     bool bCyPoint=CreateCylindricalPoint(mCy, ray2, Ow2, x3D);
-                    cv::Mat x3Dt = x3D.t();
-                    //Check triangulation in front of cameras
-                    float z1 = Rcw1.row(2).dot(x3Dt)+tcw1.at<float>(2);
-                    if(z1>0 && bCyPoint){
-                        float z2 = Rcw2.row(2).dot(x3Dt)+tcw2.at<float>(2);
-                        if(z2>0){
-                            //Check reprojection error in first keyframe
-                            const float &sigmaSquare1 = mpCurrentKeyFrame->mvLevelSigma2[kp1.octave];
-                            const float x1 = Rcw1.row(0).dot(x3Dt)+tcw1.at<float>(0);
-                            const float y1 = Rcw1.row(1).dot(x3Dt)+tcw1.at<float>(1);
-                            const float invz1 = 1.0/z1;
+                    if(bCyPoint)
+                    {
+                        cv::Mat x3Dt = x3D.t();
+                        //Check triangulation in front of cameras
+                        float z1 = Rcw1.row(2).dot(x3Dt)+tcw1.at<float>(2);
+                    
+                        // if(z1>0 && bCyPoint){
+                        if(z1>0){
+                            float z2 = Rcw2.row(2).dot(x3Dt)+tcw2.at<float>(2);
+                            if(z2>0){
+                                //Check reprojection error in first keyframe
+                                const float &sigmaSquare1 = mpCurrentKeyFrame->mvLevelSigma2[kp1.octave];
+                                const float x1 = Rcw1.row(0).dot(x3Dt)+tcw1.at<float>(0);
+                                const float y1 = Rcw1.row(1).dot(x3Dt)+tcw1.at<float>(1);
+                                const float invz1 = 1.0/z1;
 
-                            float u1 = fx1*x1*invz1+cx1;
-                            float v1 = fy1*y1*invz1+cy1;
-                            float errX1 = u1 - kp1.pt.x;
-                            float errY1 = v1 - kp1.pt.y;
-                            if((errX1*errX1+errY1*errY1)<5.991*sigmaSquare1) bmCy=1;
+                                float u1 = fx1*x1*invz1+cx1;
+                                float v1 = fy1*y1*invz1+cy1;
+                                float errX1 = u1 - kp1.pt.x;
+                                float errY1 = v1 - kp1.pt.y;
+                                if((errX1*errX1+errY1*errY1)<5.991*sigmaSquare1) bmCy=1;
+                            }
                         }
                     }
                 }
@@ -809,9 +894,18 @@ void LocalMapping::Release()
         return;
     mbStopped = false;
     mbStopRequested = false;
+    mbLightInit = false;
     for(list<KeyFrame*>::iterator lit = mlNewKeyFrames.begin(), lend=mlNewKeyFrames.end(); lit!=lend; lit++)
         delete *lit;
     mlNewKeyFrames.clear();
+
+    for(list<KeyFrame*>::iterator lit = mlNewLightKeyFrames.begin(), lend=mlNewLightKeyFrames.end(); lit!=lend; lit++)
+        delete *lit;
+    mlNewLightKeyFrames.clear();
+
+    for(list<KeyFrame*>::iterator lit = mlNewMoveKeyFrames.begin(), lend=mlNewMoveKeyFrames.end(); lit!=lend; lit++)
+        delete *lit;
+    mlNewMoveKeyFrames.clear();
 
 //    cout << "Local Mapping RELEASE" << endl;
 }
@@ -936,14 +1030,47 @@ void LocalMapping::RequestReset()
     }
 }
 
+void LocalMapping::RequestWrongInitReset()
+{
+    {
+        unique_lock<mutex> lock(mMutexWrongInitReset);
+        mbWrongInitResetRequested = true;
+    }
+
+    while(1)
+    {
+        {
+            unique_lock<mutex> lock2(mMutexWrongInitReset);
+            if(!mbWrongInitResetRequested)
+                break;
+        }
+        usleep(3000);
+    }
+}
+
 void LocalMapping::ResetIfRequested()
 {
     unique_lock<mutex> lock(mMutexReset);
     if(mbResetRequested)
     {
-        mlNewKeyFrames.clear();
+        // mlNewKeyFrames.clear();
+        // mlNewLightKeyFrames.clear();
+        // mlNewMoveKeyFrames.clear();
         mlpRecentAddedMapPoints.clear();
         mbResetRequested=false;
+    }
+}
+
+void LocalMapping::WrongInitResetIfRequested()
+{
+    unique_lock<mutex> lock(mMutexWrongInitReset);
+    if(mbWrongInitResetRequested)
+    {
+        mlNewKeyFrames.clear();
+        mlNewLightKeyFrames.clear();
+        mlNewMoveKeyFrames.clear();
+        mlpRecentAddedMapPoints.clear();
+        mbWrongInitResetRequested=false;
     }
 }
 
@@ -971,6 +1098,17 @@ bool LocalMapping::isFinished()
 {
     unique_lock<mutex> lock(mMutexFinish);
     return mbFinished;
+}
+
+void LocalMapping::setCurrentLightKeyFrame(KeyFrame* pKF)
+{
+    unique_lock<mutex> lock(mMutexLightKeyFrame);
+    mpCurrentLightKeyFrame = pKF;
+}
+void LocalMapping::setCurrentMoveKeyFrame(KeyFrame* pKF)
+{
+    unique_lock<mutex> lock(mMutexMoveKeyFrame);
+    mpCurrentMoveKeyFrame = pKF;
 }
 
 } //namespace ORB_SLAM

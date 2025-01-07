@@ -44,9 +44,9 @@ namespace ORB_SLAM2
 {
 
 Tracking::Tracking(System *pSys, ORBVocabulary* pVoc, FrameDrawer *pFrameDrawer, MapDrawer *pMapDrawer, Map *pMap, KeyFrameDatabase* pKFDB, const string &strSettingPath, const int sensor):
-    mState(NO_IMAGES_YET), mSensor(sensor), mbOnlyTracking(false), mbVO(false), mpORBVocabulary(pVoc),
+    mState(NO_IMAGES_YET), mLightState(LOST), mMoveState(NO_IMAGES_YET), mSensor(sensor), mbOnlyTracking(false), mbLightPrintFirst(true), mbMovePrintFirst(), mbVO(false), mpORBVocabulary(pVoc),
     mpKeyFrameDB(pKFDB), mpInitializer(static_cast<Initializer*>(NULL)), mpSystem(pSys), mpViewer(NULL),
-    mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpMap(pMap), mnLastRelocFrameId(0)
+    mpFrameDrawer(pFrameDrawer), mpMapDrawer(pMapDrawer), mpMap(pMap), mnLastRelocFrameId(0), mnLastLightRelocFrameId(0), mnLastMoveRelocFrameId(0), mnCntLight(0), mnCntMove(0)
 {
     // Load camera parameters from settings file
 
@@ -263,11 +263,66 @@ cv::Mat Tracking::GrabImageMonocular(const cv::Mat &im, const double &timestamp)
     return mCurrentFrame.mTcw.clone();
 }
 
+cv::Mat Tracking::GrabImageMonocular(const cv::Mat &im, const double &timestamp, const int robotID)
+{
+    unique_lock<mutex> lock(mMutexRobotType);
+    mImGray = im;
+    mRobotType = static_cast<eRobotType>(robotID);
+    if(mImGray.channels()==3)
+    {
+        if(mbRGB)
+            cvtColor(mImGray,mImGray,CV_RGB2GRAY);
+        else
+            cvtColor(mImGray,mImGray,CV_BGR2GRAY);
+    }
+    else if(mImGray.channels()==4)
+    {
+        if(mbRGB)
+            cvtColor(mImGray,mImGray,CV_RGBA2GRAY);
+        else
+            cvtColor(mImGray,mImGray,CV_BGRA2GRAY);
+    }
+
+    if(mMoveState==NOT_INITIALIZED  || mMoveState==NO_IMAGES_YET)
+        
+    {
+        if(mRobotType==LIGHT)
+            return cv::Mat();
+        // mbLightInit = false;
+        mCurrentFrame = Frame(mImGray,timestamp,mpIniORBextractor,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth);
+    }
+    else
+        mCurrentFrame = Frame(mImGray,timestamp,mpORBextractorLeft,mpORBVocabulary,mK,mDistCoef,mbf,mThDepth);
+
+    Track();
+
+    return mCurrentFrame.mTcw.clone();
+}
+
 void Tracking::Track()
 {
+    // unique_lock<mutex> lock1(mMutexRobotType);
+    if(mRobotType==LIGHT)
+    {
+        mVelocity = mLightVelocity;
+        mState = mLightState;
+        mnLastRelocFrameId = mnLastLightRelocFrameId;
+    }
+    else if(mRobotType==MOVE)
+    {
+        mVelocity = mMoveVelocity;
+        mState = mMoveState;
+        mnLastRelocFrameId = mnLastMoveRelocFrameId;
+    }
+
+    mCurrentFrame.mnRobotType = static_cast<int>(mRobotType);
     if(mState==NO_IMAGES_YET)
     {
         mState = NOT_INITIALIZED;
+        if(mRobotType==LIGHT)
+            mLightState = mState;
+        else if(mRobotType==MOVE)
+            mMoveState = mState;
     }
 
     mLastProcessedState=mState;
@@ -300,6 +355,10 @@ void Tracking::Track()
 
             if(mState==OK)
             {
+                if(mRobotType==LIGHT)
+                    mbLightPrintFirst = true;
+                else if(mRobotType==MOVE)
+                    mbMovePrintFirst = true;
                 // Local Mapping might have changed some MapPoints tracked in last frame
                 CheckReplacedInLastFrame();
 
@@ -413,6 +472,17 @@ void Tracking::Track()
         else
             mState=LOST;
 
+        if(mRobotType==LIGHT)
+        {
+            mLightState = mState;
+            mnCntLight++;
+        }
+        else if(mRobotType==MOVE)
+        {
+            mMoveState = mState;
+            mnCntMove++;
+        }
+
         // Update drawer
         mpFrameDrawer->Update(this);
 
@@ -420,17 +490,42 @@ void Tracking::Track()
         if(bOK)
         {
             // Update motion model
-            if(!mLastFrame.mTcw.empty())
+            // if(!mLastFrame.mTcw.empty())
+            // {
+            //     cv::Mat LastTwc = cv::Mat::eye(4,4,CV_32F);
+            //     mLastFrame.GetRotationInverse().copyTo(LastTwc.rowRange(0,3).colRange(0,3));
+            //     mLastFrame.GetCameraCenter().copyTo(LastTwc.rowRange(0,3).col(3));
+            //     mVelocity = mCurrentFrame.mTcw*LastTwc;
+            // }
+            if(mRobotType==MOVE && !mLastMoveFrame.mTcw.empty())
             {
                 cv::Mat LastTwc = cv::Mat::eye(4,4,CV_32F);
-                mLastFrame.GetRotationInverse().copyTo(LastTwc.rowRange(0,3).colRange(0,3));
-                mLastFrame.GetCameraCenter().copyTo(LastTwc.rowRange(0,3).col(3));
-                mVelocity = mCurrentFrame.mTcw*LastTwc;
+                mLastMoveFrame.GetRotationInverse().copyTo(LastTwc.rowRange(0,3).colRange(0,3));
+                mLastMoveFrame.GetCameraCenter().copyTo(LastTwc.rowRange(0,3).col(3));
+                mMoveVelocity  = mCurrentFrame.mTcw*LastTwc;
+            }
+            else if(mRobotType==LIGHT && !mLastLightFrame.mTcw.empty())
+            {
+                cv::Mat LastTwc = cv::Mat::eye(4,4,CV_32F);
+                mLastLightFrame.GetRotationInverse().copyTo(LastTwc.rowRange(0,3).colRange(0,3));
+                mLastLightFrame.GetCameraCenter().copyTo(LastTwc.rowRange(0,3).col(3));
+                mLightVelocity = mCurrentFrame.mTcw*LastTwc;
             }
             else
-                mVelocity = cv::Mat();
+            {
+                if(mRobotType==LIGHT)
+                    mLightVelocity = cv::Mat();
+                else if(mRobotType==MOVE)
+                    mMoveVelocity = cv::Mat();
+            }
+                // mVelocity = cv::Mat();
 
             mpMapDrawer->SetCurrentCameraPose(mCurrentFrame.mTcw);
+
+            if(mRobotType==LIGHT)
+                mpMapDrawer->SetCurrentLightCameraPose(mCurrentFrame.mTcw);
+            else if(mRobotType==MOVE)
+                mpMapDrawer->SetCurrentMoveCameraPose(mCurrentFrame.mTcw);
 
             // Clean VO matches
             for(int i=0; i<mCurrentFrame.N; i++)
@@ -454,6 +549,7 @@ void Tracking::Track()
 
             // Check if we need to insert a new keyframe
             if(NeedNewKeyFrame())
+            // if(mRobotType!=LIGHT && NeedNewKeyFrame())
                 CreateNewKeyFrame();
 
             // We allow points with high innovation (considererd outliers by the Huber Function)
@@ -470,7 +566,7 @@ void Tracking::Track()
         // Reset if the camera get lost soon after initialization
         if(mState==LOST)
         {
-            if(mpMap->KeyFramesInMap()<=5)
+            if(mpMap->KeyFramesInMap()<=5 && mRobotType==MOVE)
             {
                 cout << "Track lost soon after initialisation, reseting..." << endl;
                 mpSystem->Reset();
@@ -481,13 +577,33 @@ void Tracking::Track()
         if(!mCurrentFrame.mpReferenceKF)
             mCurrentFrame.mpReferenceKF = mpReferenceKF;
 
-        mLastFrame = Frame(mCurrentFrame);
+        // mLastFrame = Frame(mCurrentFrame);
+        
+        if(mRobotType==LIGHT)
+            mLastLightFrame = Frame(mCurrentFrame);
+        else if(mRobotType==MOVE)
+            mLastMoveFrame = Frame(mCurrentFrame);
     }
 
     // Store frame pose information to retrieve the complete camera trajectory afterwards.
     if(!mCurrentFrame.mTcw.empty())
     {
         cv::Mat Tcr = mCurrentFrame.mTcw*mCurrentFrame.mpReferenceKF->GetPoseInverse();
+        if(mRobotType==LIGHT)
+        {
+            mlLightRelativeFramePoses.push_back(Tcr);
+            mlpLightReferences.push_back(mpReferenceKF);
+            mlLightFrameTimes.push_back(mCurrentFrame.mTimeStamp);
+            mlbLightLost.push_back(mLightState==LOST);
+        }
+        else if(mRobotType==MOVE)
+        {
+            mlMoveRelativeFramePoses.push_back(Tcr);
+            mlpMoveReferences.push_back(mpReferenceKF);
+            mlMoveFrameTimes.push_back(mCurrentFrame.mTimeStamp);
+            mlbMoveLost.push_back(mMoveState==LOST);
+        }
+    
         mlRelativeFramePoses.push_back(Tcr);
         mlpReferences.push_back(mpReferenceKF);
         mlFrameTimes.push_back(mCurrentFrame.mTimeStamp);
@@ -496,6 +612,30 @@ void Tracking::Track()
     else
     {
         // This can happen if tracking is lost
+        if(mRobotType==LIGHT)
+        {
+            if(mlLightRelativeFramePoses.empty())
+            {
+                mlLightRelativeFramePoses.push_back(cv::Mat());
+                mlpLightReferences.push_back(static_cast<KeyFrame*>(NULL));
+                mlLightFrameTimes.push_back(0);
+                mlbLightLost.push_back(mLightState==LOST);
+            }
+            else
+            {
+                mlLightRelativeFramePoses.push_back(mlLightRelativeFramePoses.back());
+                mlpLightReferences.push_back(mlpLightReferences.back());
+                mlLightFrameTimes.push_back(mlLightFrameTimes.back());
+                mlbLightLost.push_back(mLightState==LOST);
+            }
+        }
+        else if(mRobotType==MOVE)
+        {
+            mlMoveRelativeFramePoses.push_back(mlMoveRelativeFramePoses.back());
+            mlpMoveReferences.push_back(mlpMoveReferences.back());
+            mlMoveFrameTimes.push_back(mlMoveFrameTimes.back());
+            mlbMoveLost.push_back(mMoveState==LOST);
+        }
         mlRelativeFramePoses.push_back(mlRelativeFramePoses.back());
         mlpReferences.push_back(mlpReferences.back());
         mlFrameTimes.push_back(mlFrameTimes.back());
@@ -568,7 +708,8 @@ void Tracking::MonocularInitialization()
         if(mCurrentFrame.mvKeys.size()>100)
         {
             mInitialFrame = Frame(mCurrentFrame);
-            mLastFrame = Frame(mCurrentFrame);
+            // mLastFrame = Frame(mCurrentFrame);
+            mLastMoveFrame = Frame(mCurrentFrame);
             mvbPrevMatched.resize(mCurrentFrame.mvKeysUn.size());
             for(size_t i=0; i<mCurrentFrame.mvKeysUn.size(); i++)
                 mvbPrevMatched[i]=mCurrentFrame.mvKeysUn[i].pt;
@@ -691,7 +832,7 @@ void Tracking::CreateInitialMapMonocular()
     if(medianDepth<0 || pKFcur->TrackedMapPoints(1)<100)
     {
         cout << "Wrong initialization, reseting..." << endl;
-        Reset();
+        WrongInitReset();
         return;
     }
 
@@ -716,7 +857,9 @@ void Tracking::CreateInitialMapMonocular()
 
     mCurrentFrame.SetPose(pKFcur->GetPose());
     mnLastKeyFrameId=mCurrentFrame.mnId;
+    mnLastMoveKeyFrameId=mCurrentFrame.mnId;
     mpLastKeyFrame = pKFcur;
+    mpLastMoveKeyFrame = pKFcur;
 
     mvpLocalKeyFrames.push_back(pKFcur);
     mvpLocalKeyFrames.push_back(pKFini);
@@ -724,7 +867,8 @@ void Tracking::CreateInitialMapMonocular()
     mpReferenceKF = pKFcur;
     mCurrentFrame.mpReferenceKF = pKFcur;
 
-    mLastFrame = Frame(mCurrentFrame);
+    // mLastFrame = Frame(mCurrentFrame);
+    mLastMoveFrame = Frame(mCurrentFrame);
 
     mpMap->SetReferenceMapPoints(mvpLocalMapPoints);
 
@@ -733,10 +877,19 @@ void Tracking::CreateInitialMapMonocular()
     mpMap->mvpKeyFrameOrigins.push_back(pKFini);
 
     mState=OK;
+
+    // if(mRobotType==LIGHT)
+    //     mLightState = mState;
+    // else if(mRobotType==MOVE)
+        mMoveState = mState;
 }
 
 void Tracking::CheckReplacedInLastFrame()
 {
+    if(mRobotType==LIGHT)
+        mLastFrame = Frame(mLastLightFrame);
+    else if(mRobotType==MOVE)
+        mLastFrame = Frame(mLastMoveFrame);
     for(int i =0; i<mLastFrame.N; i++)
     {
         MapPoint* pMP = mLastFrame.mvpMapPoints[i];
@@ -769,7 +922,11 @@ bool Tracking::TrackReferenceKeyFrame()
         return false;
 
     mCurrentFrame.mvpMapPoints = vpMapPointMatches;
-    mCurrentFrame.SetPose(mLastFrame.mTcw);
+    // mCurrentFrame.SetPose(mLastFrame.mTcw);
+    if(mRobotType==LIGHT)
+        mCurrentFrame.SetPose(mLastLightFrame.mTcw);
+    else if(mRobotType==MOVE)
+        mCurrentFrame.SetPose(mLastMoveFrame.mTcw);
 
     Optimizer::PoseOptimization(&mCurrentFrame);
 
@@ -799,9 +956,20 @@ bool Tracking::TrackReferenceKeyFrame()
 
 void Tracking::UpdateLastFrame()
 {
+    cv::Mat Tlr;
+    if(mRobotType==LIGHT)
+    {
+        mLastFrame = Frame(mLastLightFrame);
+        Tlr = mlLightRelativeFramePoses.back();
+    }
+    else if(mRobotType==MOVE)
+    {
+        mLastFrame = Frame(mLastMoveFrame);
+        Tlr = mlMoveRelativeFramePoses.back();
+    }
     // Update pose according to reference keyframe
     KeyFrame* pRef = mLastFrame.mpReferenceKF;
-    cv::Mat Tlr = mlRelativeFramePoses.back();
+    // cv::Mat Tlr = mlRelativeFramePoses.back();
 
     mLastFrame.SetPose(Tlr*pRef->GetPose());
 
@@ -865,13 +1033,22 @@ void Tracking::UpdateLastFrame()
 
 bool Tracking::TrackWithMotionModel()
 {
+    if(mRobotType==LIGHT)
+        mLastFrame = Frame(mLastLightFrame);
+    else if(mRobotType==MOVE)
+        mLastFrame = Frame(mLastMoveFrame);
+
     ORBmatcher matcher(0.9,true);
 
     // Update last frame pose according to its reference keyframe
     // Create "visual odometry" points if in Localization Mode
     UpdateLastFrame();
 
-    mCurrentFrame.SetPose(mVelocity*mLastFrame.mTcw);
+    // mCurrentFrame.SetPose(mVelocity*mLastFrame.mTcw);
+    if(mRobotType==LIGHT)
+        mCurrentFrame.SetPose(mVelocity*mLastLightFrame.mTcw);
+    else if(mRobotType==MOVE)
+        mCurrentFrame.SetPose(mVelocity*mLastMoveFrame.mTcw);
 
     fill(mCurrentFrame.mvpMapPoints.begin(),mCurrentFrame.mvpMapPoints.end(),static_cast<MapPoint*>(NULL));
 
@@ -981,6 +1158,15 @@ bool Tracking::NeedNewKeyFrame()
     // If Local Mapping is freezed by a Loop Closure do not insert keyframes
     if(mpLocalMapper->isStopped() || mpLocalMapper->stopRequested())
         return false;
+
+    if(mRobotType==LIGHT)
+    {
+        mnLastKeyFrameId = mnLastLightKeyFrameId;
+    }
+    else if(mRobotType==MOVE)
+    {
+        mnLastKeyFrameId = mnLastMoveKeyFrameId;
+    }
 
     const int nKFs = mpMap->KeyFramesInMap();
 
@@ -1131,12 +1317,50 @@ void Tracking::CreateNewKeyFrame()
         }
     }
 
-    mpLocalMapper->InsertKeyFrame(pKF);
+    // mpLocalMapper->InsertKeyFrame(pKF);
+    // if(bLastLightFrame)
+    // {
+    //     KeyFrame* pLightKF = new KeyFrame(mLastLightFrame,mpMap,mpKeyFrameDB);
+    //     mpLocalMapper->InsertLightKeyFrame(pLightKF);
+    //     mpLocalMapper->InsertMoveKeyFrame(pKF);
+    // }
+    if(mRobotType==MOVE)
+    {
+        mpLocalMapper->InsertMoveKeyFrame(pKF);
+    }
+    else if(mRobotType==LIGHT)
+    {
+        mpLocalMapper->InsertLightKeyFrame(pKF);
+    }
+    else
+    {
+        mpLocalMapper->InsertKeyFrame(pKF);
+    }
 
     mpLocalMapper->SetNotStop(false);
 
-    mnLastKeyFrameId = mCurrentFrame.mnId;
+    if(mRobotType==MOVE)
+    {
+        mnLastMoveKeyFrameId = mCurrentFrame.mnId;
+    }
+    else if(mRobotType==LIGHT)
+    {
+        mnLastLightKeyFrameId = mCurrentFrame.mnId;
+    }
+    else
+        mnLastKeyFrameId = mCurrentFrame.mnId;
     mpLastKeyFrame = pKF;
+
+    // if(mRobotType==MOVE)
+    // {
+    //     unique_lock<mutex> lock(mMutexMoveKeyFrame);
+    //     mpLastMoveKeyFrame = pKF;
+    // }
+    // else if(mRobotType==LIGHT)
+    // {
+    //     unique_lock<mutex> lock(mMutexLightKeyFrame);
+    //     mpLastLightKeyFrame = pKF;
+    // }
 }
 
 void Tracking::SearchLocalPoints()
@@ -1339,6 +1563,17 @@ void Tracking::UpdateLocalKeyFrames()
 
 bool Tracking::Relocalization()
 {
+    if(mRobotType==LIGHT && mbLightPrintFirst)
+    {
+        cout << "Track lost, Light robot relocalizing..." << endl; 
+        mbLightPrintFirst=false;
+    }
+    if(mRobotType==MOVE && mbMovePrintFirst)
+    {
+        cout << "Track lost, Move robot relocalizing..." << endl; 
+        mbMovePrintFirst=false;
+    }
+
     // Compute Bag of Words Vector
     mCurrentFrame.ComputeBoW();
 
@@ -1495,6 +1730,16 @@ bool Tracking::Relocalization()
     else
     {
         mnLastRelocFrameId = mCurrentFrame.mnId;
+        if(mRobotType==LIGHT)
+        {
+            mnLastLightRelocFrameId = mCurrentFrame.mnId;
+            cout << "Light Robot Relocalization Successful!" << endl;
+        }
+        else if(mRobotType==MOVE)
+        {
+            mnLastMoveRelocFrameId = mCurrentFrame.mnId;
+            cout << "Move Robot Relocalization Successful!" << endl;
+        }
         return true;
     }
 
@@ -1527,11 +1772,81 @@ void Tracking::Reset()
     cout << " done" << endl;
 
     // Clear Map (this erase MapPoints and KeyFrames)
+    mpMap->exchangeClear();
+
+    // Clear Map Points in lastframes
+    for(int i=0; i<mLastFrame.N; i++)
+    {
+        mLastFrame.mvpMapPoints[i]=static_cast<MapPoint*>(NULL);
+    }
+    for(int i=0; i<mLastLightFrame.N; i++)
+    {
+        mLastLightFrame.mvpMapPoints[i]=static_cast<MapPoint*>(NULL);
+    }
+    for(int i=0; i<mLastMoveFrame.N; i++)
+    {
+        mLastMoveFrame.mvpMapPoints[i]=static_cast<MapPoint*>(NULL);
+    }
+
+    // KeyFrame::nNextId = 0;
+    // Frame::nNextId = 0;
+    KeyFrame::nMinOptId = KeyFrame::nNextId;
+    Frame::nMinOptId = Frame::nNextId;
+    // mState = NO_IMAGES_YET;
+
+    if(mpInitializer)
+    {
+        delete mpInitializer;
+        mpInitializer = static_cast<Initializer*>(NULL);
+    }
+
+    // mlRelativeFramePoses.clear();
+    // mlpReferences.clear();
+    // mlFrameTimes.clear();
+    // mlbLost.clear();
+
+    if(mpViewer)
+        mpViewer->Release();
+
+    cout << "System Exchange Done!" << endl;
+}
+
+void Tracking::WrongInitReset()
+{
+    if(mpViewer)
+    {
+        mpViewer->RequestStop();
+        while(!mpViewer->isStopped())
+            usleep(3000);
+    }
+
+    // Reset Local Mapping
+    cout << "Reseting Local Mapper...";
+    mpLocalMapper->RequestWrongInitReset();
+    cout << " done" << endl;
+
+    // Reset Loop Closing
+    cout << "Reseting Loop Closing...";
+    mpLoopClosing->RequestReset();
+    cout << " done" << endl;
+
+    // Clear BoW Database
+    cout << "Reseting Database...";
+    mpKeyFrameDB->clear();
+    cout << " done" << endl;
+
+    // Clear Map (this erase MapPoints and KeyFrames)
     mpMap->clear();
 
     KeyFrame::nNextId = 0;
     Frame::nNextId = 0;
+    KeyFrame::nMinOptId = 0;
+    Frame::nMinOptId = 0;
     mState = NO_IMAGES_YET;
+    // if(mRobotType==LIGHT)
+    //     mLightState = mState;
+    // else if(mRobotType==MOVE)
+        mMoveState = mState;
 
     if(mpInitializer)
     {
@@ -1540,9 +1855,17 @@ void Tracking::Reset()
     }
 
     mlRelativeFramePoses.clear();
+    mlLightRelativeFramePoses.clear();
+    mlMoveRelativeFramePoses.clear();
     mlpReferences.clear();
+    mlpLightReferences.clear();
+    mlpMoveReferences.clear();
     mlFrameTimes.clear();
+    mlMoveFrameTimes.clear();
+    mlLightFrameTimes.clear();
     mlbLost.clear();
+    mlbLightLost.clear();
+    mlbMoveLost.clear();
 
     if(mpViewer)
         mpViewer->Release();
@@ -1584,6 +1907,17 @@ void Tracking::ChangeCalibration(const string &strSettingPath)
 void Tracking::InformOnlyTracking(const bool &flag)
 {
     mbOnlyTracking = flag;
+}
+
+KeyFrame* Tracking::getLastLightKeyFrame()
+{
+    unique_lock<mutex> lock(mMutexLightKeyFrame);
+    return mpLastLightKeyFrame;
+}
+KeyFrame* Tracking::getLastMoveKeyFrame()
+{
+    unique_lock<mutex> lock(mMutexMoveKeyFrame);
+    return mpLastMoveKeyFrame;
 }
 
 

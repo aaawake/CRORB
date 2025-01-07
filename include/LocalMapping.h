@@ -50,10 +50,13 @@ public:
     void Run();
 
     void InsertKeyFrame(KeyFrame* pKF);
+    void InsertLightKeyFrame(KeyFrame* pKF);
+    void InsertMoveKeyFrame(KeyFrame* pKF);
 
     // Thread Synch
     void RequestStop();
     void RequestReset();
+    void RequestWrongInitReset();
     bool Stop();
     void Release();
     bool isStopped();
@@ -73,9 +76,16 @@ public:
     }
     bool Triangulation(cv::Mat& x3D, cv::Mat xn1, cv::Mat xn2, cv::Mat Tcw1, cv::Mat Tcw2, KeyFrame* pKF2, const int idx1, const int idx2);
     bool CreateCylindricalPoint(MapCylinder* Cy, cv::Mat ray, cv::Mat Ow, cv::Mat &x3D);
+
+    void setCurrentLightKeyFrame(KeyFrame* pKF);
+    void setCurrentMoveKeyFrame(KeyFrame* pKF);
 protected:
 
     bool CheckNewKeyFrames();
+    bool CheckMoveNewKeyFrames();
+    bool CheckLightNewKeyFrames();
+    bool CheckAllNewKeyFrames();
+    void SetRobotType();
     void ProcessNewKeyFrame();
     void CreateNewMapPoints();
 
@@ -91,8 +101,11 @@ protected:
     bool mbMonocular;
 
     void ResetIfRequested();
+    void WrongInitResetIfRequested();
     bool mbResetRequested;
+    bool mbWrongInitResetRequested;
     std::mutex mMutexReset;
+    std::mutex mMutexWrongInitReset;
 
     bool CheckFinish();
     void SetFinish();
@@ -106,8 +119,12 @@ protected:
     Tracking* mpTracker;
 
     std::list<KeyFrame*> mlNewKeyFrames;
+    std::list<KeyFrame*> mlNewLightKeyFrames;
+    std::list<KeyFrame*> mlNewMoveKeyFrames;
 
     KeyFrame* mpCurrentKeyFrame;
+    KeyFrame* mpCurrentLightKeyFrame;
+    KeyFrame* mpCurrentMoveKeyFrame;
 
     std::list<MapPoint*> mlpRecentAddedMapPoints;
 
@@ -122,6 +139,13 @@ protected:
 
     bool mbAcceptKeyFrames;
     std::mutex mMutexAccept;
+
+    bool mbLightInit;
+    bool mbNewMoveKeyFrame;
+    std::mutex mMutexLightKeyFrame;
+    std::mutex mMutexMoveKeyFrame;
+
+    int mnRobotType;
 };
 
 } //namespace ORB_SLAM

@@ -28,6 +28,7 @@
 #include "System.h"
 
 #include <mutex>
+// #include <ros/ros.h>
 
 namespace ORB_SLAM2
 {
@@ -55,6 +56,8 @@ public:
     bool isStopped();
 
     void Release();
+
+    void ExchangeOtherCar();
 
 private:
 

@@ -61,10 +61,14 @@ public:
     cv::Mat GrabImageStereo(const cv::Mat &imRectLeft,const cv::Mat &imRectRight, const double &timestamp);
     cv::Mat GrabImageRGBD(const cv::Mat &imRGB,const cv::Mat &imD, const double &timestamp);
     cv::Mat GrabImageMonocular(const cv::Mat &im, const double &timestamp);
+    cv::Mat GrabImageMonocular(const cv::Mat &im, const double &timestamp, const int robotID);
 
     void SetLocalMapper(LocalMapping* pLocalMapper);
     void SetLoopClosing(LoopClosing* pLoopClosing);
     void SetViewer(Viewer* pViewer);
+
+    KeyFrame* getLastLightKeyFrame();
+    KeyFrame* getLastMoveKeyFrame();
 
     // Load new settings
     // The focal lenght should be similar or scale prediction will fail when projecting points
@@ -87,7 +91,19 @@ public:
     };
 
     eTrackingState mState;
-    eTrackingState mLastProcessedState;
+    eTrackingState mLightState;
+    eTrackingState mMoveState;
+    eTrackingState mLastProcessedState;   // For Pangolin Drawer
+
+    // Type of the robot which current frame belongs to.
+    enum eRobotType{
+        LIGHT=0,
+        MOVE=1
+    };
+    eRobotType mRobotType;
+
+    bool mbLightInit;
+    std::mutex mMutexRobotType;
 
     // Input sensor
     int mSensor;
@@ -106,14 +122,25 @@ public:
     // Lists used to recover the full camera trajectory at the end of the execution.
     // Basically we store the reference keyframe for each frame and its relative transformation
     list<cv::Mat> mlRelativeFramePoses;
+    list<cv::Mat> mlLightRelativeFramePoses;
+    list<cv::Mat> mlMoveRelativeFramePoses;
     list<KeyFrame*> mlpReferences;
+    list<KeyFrame*> mlpLightReferences;
+    list<KeyFrame*> mlpMoveReferences;
     list<double> mlFrameTimes;
+    list<double> mlLightFrameTimes;
+    list<double> mlMoveFrameTimes;
     list<bool> mlbLost;
+    list<bool> mlbLightLost;
+    list<bool> mlbMoveLost;
 
     // True if local mapping is deactivated and we are performing only localization
     bool mbOnlyTracking;
+    bool mbLightPrintFirst;
+    bool mbMovePrintFirst;
 
     void Reset();
+    void WrongInitReset();
 
 protected:
 
@@ -203,17 +230,36 @@ protected:
 
     //Last Frame, KeyFrame and Relocalisation Info
     KeyFrame* mpLastKeyFrame;
+    KeyFrame* mpLastLightKeyFrame;
+    KeyFrame* mpLastMoveKeyFrame;
+
+    std::mutex mMutexLightKeyFrame;
+    std::mutex mMutexMoveKeyFrame;
+
     Frame mLastFrame;
+    Frame mLastLightFrame;
+    Frame mLastMoveFrame;
     unsigned int mnLastKeyFrameId;
+    unsigned int mnLastLightKeyFrameId;
+    unsigned int mnLastMoveKeyFrameId;
     unsigned int mnLastRelocFrameId;
+    unsigned int mnLastLightRelocFrameId;
+    unsigned int mnLastMoveRelocFrameId;
+
+    bool bLastLightFrame;
 
     //Motion Model
     cv::Mat mVelocity;
+    cv::Mat mLightVelocity;
+    cv::Mat mMoveVelocity;
 
     //Color order (true RGB, false BGR, ignored if grayscale)
     bool mbRGB;
 
     list<MapPoint*> mlpTemporalPoints;
+
+    unsigned int mnCntLight;
+    unsigned int mnCntMove;
 };
 
 } //namespace ORB_SLAM

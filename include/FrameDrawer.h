@@ -48,6 +48,9 @@ public:
     // Draw last processed frame.
     cv::Mat DrawFrame();
 
+    cv::Mat DrawFrameMove();
+    cv::Mat DrawFrameLight();
+
 protected:
 
     void DrawTextInfo(cv::Mat &im, int nState, cv::Mat &imText);
@@ -63,9 +66,21 @@ protected:
     vector<int> mvIniMatches;
     int mState;
 
+    cv::Mat mImLight;
+    int NLight;
+    vector<cv::KeyPoint> mvLightCurrentKeys;
+    vector<bool> mvbLightMap, mvbLightVO;
+    vector<cv::KeyPoint> mvLightIniKeys;
+    vector<int> mvLightIniMatches;
+    int mLightState;
+
+    int mType;
+
     Map* mpMap;
 
     std::mutex mMutex;
+    std::mutex mMutexLight;
+    std::mutex mMutexMove;
 };
 
 } //namespace ORB_SLAM

@@ -21,6 +21,8 @@
 #include "Viewer.h"
 #include <pangolin/pangolin.h>
 
+// #include <std_msgs/UInt8.h>
+
 #include <mutex>
 
 namespace ORB_SLAM2
@@ -73,9 +75,13 @@ void Viewer::Run()
     pangolin::Var<bool> menuShowCylinder("menu.Show Cylinder",true,true);
     pangolin::Var<bool> menuLocalizationMode("menu.Localization Mode",false,true);
     pangolin::Var<bool> menuReset("menu.Reset",false,false);
-
+    // pangolin::Var<bool> menuExchange("menu.Exchange",false,false);
     // Define Camera Render Object (for view / scene browsing)
     pangolin::OpenGlRenderState s_cam(
+                pangolin::ProjectionMatrix(1024,768,mViewpointF,mViewpointF,512,389,0.1,1000),
+                pangolin::ModelViewLookAt(mViewpointX,mViewpointY,mViewpointZ, 0,0,0,0.0,-1.0, 0.0)
+                );
+    pangolin::OpenGlRenderState s_cam1(
                 pangolin::ProjectionMatrix(1024,768,mViewpointF,mViewpointF,512,389,0.1,1000),
                 pangolin::ModelViewLookAt(mViewpointX,mViewpointY,mViewpointZ, 0,0,0,0.0,-1.0, 0.0)
                 );
@@ -84,11 +90,17 @@ void Viewer::Run()
     pangolin::View& d_cam = pangolin::CreateDisplay()
             .SetBounds(0.0, 1.0, pangolin::Attach::Pix(175), 1.0, -1024.0f/768.0f)
             .SetHandler(new pangolin::Handler3D(s_cam));
+    pangolin::View& d_cam1 = pangolin::CreateDisplay()
+            .SetBounds(0.0, 1.0, pangolin::Attach::Pix(175), 1.0, -1024.0f/768.0f)
+            .SetHandler(new pangolin::Handler3D(s_cam1));
 
     pangolin::OpenGlMatrix Twc;
     Twc.SetIdentity();
+    pangolin::OpenGlMatrix Twc1;
+    Twc1.SetIdentity();
 
     cv::namedWindow("ORB-SLAM2: Current Frame");
+    cv::namedWindow("ORB-SLAM2: Light Frame");
 
     bool bFollow = true;
     bool bLocalizationMode = false;
@@ -97,16 +109,21 @@ void Viewer::Run()
     {
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        mpMapDrawer->GetCurrentOpenGLCameraMatrix(Twc);
+        // mpMapDrawer->GetCurrentOpenGLCameraMatrix(Twc);
+        mpMapDrawer->GetCurrentMoveOpenGLCameraMatrix(Twc);
+        mpMapDrawer->GetCurrentLightOpenGLCameraMatrix(Twc1);
 
         if(menuFollowCamera && bFollow)
         {
             s_cam.Follow(Twc);
+            // s_cam1.Follow(Twc1);
         }
         else if(menuFollowCamera && !bFollow)
         {
             s_cam.SetModelViewMatrix(pangolin::ModelViewLookAt(mViewpointX,mViewpointY,mViewpointZ, 0,0,0,0.0,-1.0, 0.0));
             s_cam.Follow(Twc);
+            // s_cam1.SetModelViewMatrix(pangolin::ModelViewLookAt(mViewpointX,mViewpointY,mViewpointZ, 0,0,0,0.0,-1.0, 0.0));
+            // s_cam1.Follow(Twc1);
             bFollow = true;
         }
         else if(!menuFollowCamera && bFollow)
@@ -126,8 +143,10 @@ void Viewer::Run()
         }
 
         d_cam.Activate(s_cam);
+        d_cam1.Activate(s_cam1);
         glClearColor(1.0f,1.0f,1.0f,1.0f);
         mpMapDrawer->DrawCurrentCamera(Twc);
+        mpMapDrawer->DrawCurrentCamera(Twc1);
         if(menuShowKeyFrames || menuShowGraph)
             mpMapDrawer->DrawKeyFrames(menuShowKeyFrames,menuShowGraph);
         if(menuShowPoints)
@@ -137,8 +156,14 @@ void Viewer::Run()
 
         pangolin::FinishFrame();
 
-        cv::Mat im = mpFrameDrawer->DrawFrame();
-        cv::imshow("ORB-SLAM2: Current Frame",im);
+        // cv::Mat im = mpFrameDrawer->DrawFrame();
+        cv::Mat imLight = mpFrameDrawer->DrawFrameLight();
+        cv::Mat imMove = mpFrameDrawer->DrawFrameMove();
+        if(!imLight.empty())
+            cv::imshow("ORB-SLAM2: Light Frame",imLight);
+        cv::imshow("ORB-SLAM2: Current Frame",imMove);
+
+        // cv::imshow("ORB-SLAM2: Current Frame",im);
         cv::waitKey(mT);
 
         if(menuReset)
@@ -155,6 +180,13 @@ void Viewer::Run()
             mpSystem->Reset();
             menuReset = false;
         }
+
+        // if(menuExchange)
+        // {
+        //     ExchangeOtherCar();
+        //     mpSystem->Reset();
+        //     menuExchange  = false;
+        // }
 
         if(Stop())
         {
@@ -205,6 +237,7 @@ void Viewer::RequestStop()
 bool Viewer::isStopped()
 {
     unique_lock<mutex> lock(mMutexStop);
+    // std::cout << "Viewer::isStopped() mbStopped = " << mbStopped << std::endl;
     return mbStopped;
 }
 
@@ -230,6 +263,21 @@ void Viewer::Release()
 {
     unique_lock<mutex> lock(mMutexStop);
     mbStopped = false;
+}
+
+void Viewer::ExchangeOtherCar()
+{
+    cout << "Exchange!" << endl;
+
+    // ros::NodeHandle nodeHandler;
+    // ros::Publisher pub = nodeHandler.advertise<std_msgs::UInt8>("Exchange", 1000); 
+    // std_msgs::UInt8 msg;
+    // msg.data = 1;
+
+    // pub.publish(msg);
+    // ROS_INFO("Exchange!");
+
+    cout << "End Exchange!" << endl;
 }
 
 }

@@ -131,6 +131,9 @@ public:
     static long unsigned int nNextId;
     long unsigned int mnId;
     const long unsigned int mnFrameId;
+    static long unsigned int nMinOptId;
+
+    int mnRobotType;
 
     const double mTimeStamp;
 
@@ -165,6 +168,7 @@ public:
     // Calibration parameters
     const float fx, fy, cx, cy, invfx, invfy, mbf, mb, mThDepth;
 
+    // 修改：exchange时，清空对应的KPs和Descriptor？
     // Number of KeyPoints
     const int N;
 

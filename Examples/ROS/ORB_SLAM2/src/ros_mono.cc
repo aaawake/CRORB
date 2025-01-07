@@ -51,7 +51,7 @@ public:
 
     void ExchangeCallback(const std_msgs::UInt8::ConstPtr& msg);
     void GrabImage(const sensor_msgs::ImageConstPtr& msg);
-    void GrabImage(const sensor_msgs::CompressedImageConstPtr& msg);
+    void GrabImage(const sensor_msgs::CompressedImageConstPtr& msg, const int robotID = 1);
 
     ORB_SLAM2::System* mpSLAM;
 };
@@ -67,6 +67,8 @@ int main(int argc, char **argv)
         ros::shutdown();
         return 1;
     }    
+
+    ros::Duration(6).sleep();
 
     // Create SLAM system. It initializes all system threads and gets ready to process frames.
     ORB_SLAM2::System SLAM(argv[1],argv[2],ORB_SLAM2::System::MONOCULAR,true);
@@ -84,10 +86,19 @@ int main(int argc, char **argv)
         [&igb](const std_msgs::UInt8ConstPtr& msg) { igb.ExchangeCallback(msg); }
     );
 
+    // Move robot
     ros::Subscriber sub = nodeHandler.subscribe<sensor_msgs::CompressedImage>(
-        "/usb_cam/image_raw/compressed", 
+        "/robot_1/image_raw/compressed", 
         1, 
-        [&igb](const sensor_msgs::CompressedImageConstPtr& msg) { igb.GrabImage(msg); }
+        [&igb](const sensor_msgs::CompressedImageConstPtr& msg) { igb.GrabImage(msg, 1); }
+    );
+
+    // Light robot
+    ros::Subscriber light_sub = nodeHandler.subscribe<sensor_msgs::CompressedImage>(
+        // 修改：改rostopic
+        "/robot_0/image_raw/compressed", 
+        1, 
+        [&igb](const sensor_msgs::CompressedImageConstPtr& msg) { igb.GrabImage(msg, 0); }
     );
 
     // ros::Duration(1).sleep();
@@ -96,7 +107,7 @@ int main(int argc, char **argv)
     // igb.exchange_pub.publish(initial_msg);
     // ROS_INFO("Initial Exchange message published with data=0.");
 
-    ros::Duration(2).sleep();
+    ros::Duration(6).sleep();
     thread tViewer = thread(&ORB_SLAM2::ViewerMono::Run,&viewerMono);
     
     ros::MultiThreadedSpinner spinner(4); // 使用4个线程
@@ -148,7 +159,7 @@ void ImageGrabber::GrabImage(const sensor_msgs::ImageConstPtr& msg)
     mpSLAM->TrackMonocular(cv_ptr->image,cv_ptr->header.stamp.toSec());
 }
 
-void ImageGrabber::GrabImage(const sensor_msgs::CompressedImageConstPtr& msg)
+void ImageGrabber::GrabImage(const sensor_msgs::CompressedImageConstPtr& msg, const int robotID)
 {
     {
         std::unique_lock<std::mutex> lock(exchange_mutex);
@@ -177,6 +188,6 @@ void ImageGrabber::GrabImage(const sensor_msgs::CompressedImageConstPtr& msg)
         ROS_ERROR("cv_bridge exception: %s", e.what());
         return;
     }
-    mpSLAM->TrackMonocular(image,msg->header.stamp.toSec());
+    mpSLAM->TrackMonocular(image,msg->header.stamp.toSec(), robotID);
 }
 

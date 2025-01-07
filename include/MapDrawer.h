@@ -42,8 +42,12 @@ public:
     void DrawKeyFrames(const bool bDrawKF, const bool bDrawGraph);
     void DrawCurrentCamera(pangolin::OpenGlMatrix &Twc);
     void SetCurrentCameraPose(const cv::Mat &Tcw);
+    void SetCurrentLightCameraPose(const cv::Mat &Tcw);
+    void SetCurrentMoveCameraPose(const cv::Mat &Tcw);
     void SetReferenceKeyFrame(KeyFrame *pKF);
     void GetCurrentOpenGLCameraMatrix(pangolin::OpenGlMatrix &M);
+    void GetCurrentLightOpenGLCameraMatrix(pangolin::OpenGlMatrix &M);
+    void GetCurrentMoveOpenGLCameraMatrix(pangolin::OpenGlMatrix &M);
     void DrawMapCylinder();
 
 private:
@@ -56,8 +60,12 @@ private:
     float mCameraLineWidth;
 
     cv::Mat mCameraPose;
+    cv::Mat mLightCameraPose;
+    cv::Mat mMoveCameraPose;
 
     std::mutex mMutexCamera;
+    std::mutex mMutexLightCamera;
+    std::mutex mMutexMoveCamera;
 };
 
 } //namespace ORB_SLAM

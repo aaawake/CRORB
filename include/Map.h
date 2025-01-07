@@ -69,6 +69,7 @@ public:
     long unsigned int GetMaxCyId();
 
     void clear();
+    void exchangeClear();
 
     vector<KeyFrame*> mvpKeyFrameOrigins;
     MapCylinder* CandiateCylinder;  //cylinder
